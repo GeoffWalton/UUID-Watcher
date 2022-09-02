@@ -1,16 +1,47 @@
 require 'java'
 require 'csv'
 require 'thread'
-java_import 'burp.IExtensionHelpers'
+
+java_import 'javax.swing.JMenuItem'
+class BMenuItem < JMenuItem
+  def initialize(text, &onClick)
+    super(text)
+    self.add_action_listener onClick
+  end
+end
 
 java_import 'javax.swing.JOptionPane'
-java_import 'burp.ITab'
-java_import 'javax.swing.JPanel'
-java_import 'javax.swing.JScrollPane'
-java_import 'java.awt.Dimension'
-java_import 'java.awt.Rectangle'
-java_import 'java.awt.event.ComponentListener'
+java_import 'javax.swing.JFileChooser'
+java_import 'javax.swing.filechooser.FileNameExtensionFilter'
+class BFileChooser
+  attr_writer :directory
 
+  def initialize(parent=nil, directory=nil)
+    @parent = parent
+    @filter = nil
+    @directory = directory
+  end
+
+  def filter(description, *extensions)
+    @filter = FileNameExtensionFilter.new description, *extensions
+    self
+  end
+
+  def prompt(text, &block)
+    chooser = obj
+    return nil unless JFileChooser::APPROVE_OPTION == chooser.showDialog(@parent, text)
+    f = chooser.getSelectedFile
+    return nil unless f.isFile
+    block.call f.getAbsoluteFile.to_s
+  end
+
+  private
+  def obj
+    o = @directory ? JFileChooser.new(@directory) : JFileChooser.new
+    o.setFileFilter @filter if @filter
+    o
+  end
+end
 
 module BURPMethods
   def self.included(base)
@@ -46,341 +77,282 @@ module BURPMethods
   end
 end
 
-class AbstractBrupExtensionUI < JScrollPane
-  include ITab
-  include ComponentListener
+java_import 'burp.IParameter'
+java_import 'burp.IContextMenuInvocation'
+java_import 'burp.IRequestInfo'
+module BURPEnums
 
-  def initialize(extension)
-    @panel = JPanel.new
-    @panel.setLayout nil
-    super(@panel)
-    @extension = extension
-    addComponentListener self
-  end
+  ParameterTypes = {
+ Java::Burp::IParameter::PARAM_URL => :url,
+ Java::Burp::IParameter::PARAM_BODY => :body,
+ Java::Burp::IParameter::PARAM_COOKIE => :cookie,
+ Java::Burp::IParameter::PARAM_XML => :XML,
+ Java::Burp::IParameter::PARAM_XML_ATTR => :XML_Attribute,
+ Java::Burp::IParameter::PARAM_MULTIPART_ATTR => :XML_Multipart,
+ Java::Burp::IParameter::PARAM_JSON => :JSON,
+  }
+  ParameterTypes.default = :undefined
+  ParameterTypes.freeze
 
-  def extensionName
-    @extension.extensionName
-  end
-
-  def add(component)
-    bounds = component.getBounds
-    updateSize(bounds.getX + bounds.getWidth, bounds.getY + bounds.getHeight)
-    @panel.add component
-  end
-
-  alias_method :getTabCaption, :extensionName
-
-  def getUiComponent
-    self
-  end
-
-  private
-  #Don't set the size smaller than existing widget positions
-  def updateSize(x,y)
-    x = (@panel.getWidth() > x) ? @panel.getWidth : x
-    y = (@panel.getHeight() > y) ? @panel.getHeight : y
-    @panel.setPreferredSize(Dimension.new(x,y))
-  end
+  ContextMenuInvocation = {
+    Java::Burp::IContextMenuInvocation::CONTEXT_MESSAGE_EDITOR_REQUEST => :editor_request,
+    Java::Burp::IContextMenuInvocation::CONTEXT_MESSAGE_EDITOR_RESPONSE => :editor_response,
+    Java::Burp::IContextMenuInvocation::CONTEXT_MESSAGE_VIEWER_REQUEST => :viewer_request,
+    Java::Burp::IContextMenuInvocation::CONTEXT_MESSAGE_VIEWER_RESPONSE => :viewer_response,
+    Java::Burp::IContextMenuInvocation::CONTEXT_TARGET_SITE_MAP_TREE => :site_map_tree,
+    Java::Burp::IContextMenuInvocation::CONTEXT_TARGET_SITE_MAP_TABLE => :site_map_table,
+    Java::Burp::IContextMenuInvocation::CONTEXT_PROXY_HISTORY => :proxy_history,
+    Java::Burp::IContextMenuInvocation::CONTEXT_SCANNER_RESULTS => :scanner_results,
+    Java::Burp::IContextMenuInvocation::CONTEXT_INTRUDER_PAYLOAD_POSITIONS => :intruder_payload_position,
+    Java::Burp::IContextMenuInvocation::CONTEXT_INTRUDER_ATTACK_RESULTS => :intruder_attack_result,
+    Java::Burp::IContextMenuInvocation::CONTEXT_SEARCH_RESULTS => :search_results
+  }
+  ContextMenuInvocation.freeze
 
 end
-
-java_import('java.awt.Insets')
-class AbstractBurpUIElement
-  def initialize(parent, obj, positionX, positionY, width, height)
-    @swingElement =obj
-    setPosition parent, positionX, positionY, width, height
-    parent.add @swingElement
-  end
-
-  def method_missing(method, *args, &block)
-    @swingElement.send(method, *args)
-  end
-
-  private
-  def setPosition(parent, x,y,width,height)
-    insets = parent.getInsets
-    size = @swingElement.getPreferredSize()
-    w = (width > size.width) ? width : size.width
-    h = (height > size.height) ? height : size.height
-    @swingElement.setBounds(x + insets.left, y + insets.top, w, h)
-  end
-end
-
-class BPanel < AbstractBurpUIElement
-  include ComponentListener
-
-  def initialize(parent, positionX, positionY, width, height)
-    obj = JPanel.new
-    obj.setLayout nil
-    super parent, obj, positionX,positionY, width, height
-  end
-end
-
-java_import 'javax.swing.JLabel'
-class BLabel < AbstractBurpUIElement
-  def initialize(parent, positionX, positionY, width, height, caption, align= :left)
-    case align
-    when :left
-      a = 2
-    when :right
-      a = 4
-    when :center
-      a = 0
-    else
-      a = 2 #align left
-    end
-    super parent, JLabel.new(caption, a),positionX, positionY, width, height
-  end
-end
-
-java_import 'javax.swing.JButton'
-class BButton < AbstractBurpUIElement
-  def initialize(parent, positionX, positionY, width, height, caption, &onClick)
-    super parent, JButton.new(caption), positionX, positionY, width, height
-    @swingElement.add_action_listener onClick
-  end
-end
-
-java_import 'javax.swing.JSeparator'
-class BHorizSeparator < AbstractBurpUIElement
-  def initialize(parent, positionX, positionY, width)
-    super parent, JSeparator.new(0), positionX, positionY, width, 1
-  end
-end
-
-class BVertSeparator < AbstractBurpUIElement
-  def initialize(parent, positionX, positionY, height)
-    super parent, JSeparator.new(1), positionX, positionY, 1, height
-  end
-end
-
-java_import 'javax.swing.JCheckBox'
-class BCheckBox < AbstractBurpUIElement
-  def initialize(parent, positionX, positionY, width, height, caption)
-    super parent, JCheckBox.new(caption), positionX, positionY, width, height
-  end
-end
-
-java_import 'javax.swing.JTextField'
-class BTextField < AbstractBurpUIElement
-  def initialize(parent, positionX, positionY, width, height, caption)
-    super parent, JTextField.new(caption), positionX, positionY, width, height
-  end
-end
-
-java_import 'javax.swing.JComboBox'
-class BComboBox < AbstractBurpUIElement
-  def initialize(parent, positionX, positionY, width, height, &evt)
-    super parent, JComboBox.new, positionX, positionY, width, height
-    @swingElement.add_action_listener evt
-  end
-end
-
-java_import 'javax.swing.JTextArea'
-class BTextArea < AbstractBurpUIElement
-  def initialize(parent, positionX, positionY, width, height)
-    @textArea = JTextArea.new
-    super parent, JScrollPane.new(@textArea), positionX, positionY, width, height
-    @textArea.setLineWrap(true)
-  end
-
-  def setText(text)
-    @textArea.setText text
-  end
-
-  def getText
-    @textArea.getText
-  end
-
-  def setEditable(value)
-    @textArea.setEditable(value)
-  end
-end
-
-java_import 'burp.ITextEditor'
-class BTextEditor < AbstractBurpUIElement
-  def initialize(parent, callbacks, positionX, positionY, width, height)
-    @textArea = callbacks.createTextEditor
-    super parent, JScrollPane.new(@textArea.getComponent), positionX, positionY, width, height
-  end
-
-  def setText(text)
-    @textArea.setText text.bytes
-  end
-
-  def getText
-    @textArea.getText.map {|b| b.chr}.join
-  end
-end
-
-java_import 'javax.swing.JMenuItem'
-class BMenuItem < JMenuItem
-  def initialize(text, &onClick)
-    super(text)
-    self.add_action_listener onClick
-  end
-end
-
 #########################################################################################
 #Begin Burp Extension
 #########################################################################################
-java_import 'burp.IScannerCheck'
-java_import 'burp.IScanIssue'
-class UUIDCorrelationScanCheck
-  include IScannerCheck
+
+class UUIDCorrelation
   include BURPMethods
+  include BURPEnums
 
-  GUID_MIN_UNIQ_BYTES = 7
   GUID_RE = /(?:[0-9a-fA-F]{8}(?:(?:-|%2d|%2D)?[0-9a-fA-F]{4}){3}(?:-|%2d|%2D)?[0-9a-fA-F]{12})/
+  GQL_REQUEST_RE = /query":"(?<type>query|mutation)\s(?<name>\w*)/
+  GQL_REQUEST_Q_RE = /(?<type>query)=\{(?<name>\w*)\{/
+  GQL_RESPONSE_RE = /"data":{/
 
-  #inner class to hold some request details
-  class UUIDParameterInfo
-    attr_accessor :name
-    attr_writer :type
-    attr_accessor :uuid
-
-    def eql?(other)
-      self.name == other.name && self.type == other.type && self.uuid == other.uuid
+  module UUID_UTIL
+    def normalize(uuid)
+      t = uuid.tr '-', ''
+      t.downcase!
+      [( t.sub('%2d', '') || t )].pack 'H*'
     end
 
-    alias_method :==, :eql?
+    def uuidToString(uuid)
+      x.bytes.map {|x| x.to_s(16) }.join
+    end
+  end
 
-    def type
-      return @type if @type.kind_of? String
-      case @type
-      when 0
-        'url'
-      when 1
-        'body'
-      when 2
-        'Cookie'
-      when 3
-        'XML'
-      when 4
-        'XML attribute'
-      when 5
-        'multipart attribute'
-      when 6
-        'JSON'
-      else
-        'Unknown/Undefined'
+  class ResponseIds
+    #collect and de-dupe url, uuid pairs
+
+    include UUID_UTIL
+
+    def initialize
+      @sync = Mutex.new
+      @items = Hash.new
+    end
+
+    def clear
+      @sync.synchronize { @items.clear }
+    end
+
+    def add(url, uuid)
+      id = normalize uuid
+      @sync.synchronize do
+        urls = @items[id] || Array.new
+        urls << url unless urls.include? url
+        @items[id] = urls
       end
     end
 
-    def initialize(parameter = nil)
-      if parameter
-        @name = parameter.getName
-        @type = parameter.getType
+    def [](uuid)
+      #id = normalize uuid
+      @sync.synchronize do
+        @items[uuid]
       end
     end
   end
 
-  #Satisfy interface requirements
-  def doActiveScan(baseRequestResponse, insertionPoint); nil; end
-  def consolidateDuplicateIssues(existingIssue, newIssue); 0; end
+  class RequestIds
+    #collect and de-dupe, uuid, url, parameter, and parameter type tuples
+    # cheat and leverage the member equality and #hash properties of structs to find dupes
+
+    include UUID_UTIL
+    include BURPEnums
+    Key = Struct.new(:url, :method, :parameter, :parameterType, :gqlType, :gqlOperation)
+
+    def initialize
+      @sync = Mutex.new
+      @items = Hash.new
+    end
+
+    def clear
+      @sync.synchronize { @items.clear }
+    end
+
+    def add(url, method, name, type, uuid, gqlType = nil, gqlOperation = nil)
+      id = normalize uuid
+      key = Key.new(url.to_s, method.to_s, name.to_s, type, gqlType, gqlOperation.to_s)
+      @sync.synchronize do
+        uuids = @items[key] || Array.new
+        uuids << id unless uuids.include? id
+        @items[key] = uuids
+      end
+    end
+
+    def each(&block)
+      @sync.synchronize { @items.send :each, &block }
+    end
+
+  end
 
   def initialize
-    super
-    @responseUUIDS = Hash.new
-    @requestUUIDS = Hash.new
-    @sync = Mutex.new
+    @responseUUIDS = ResponseIds.new
+    @requestUUIDS = RequestIds.new
   end
 
-  def doPassiveScan(baseRequestResponse)
-    #Find the 'base url'
-    reqInfo = analyzeRequest(baseRequestResponse.getHttpService, baseRequestResponse.getRequest)
-    url = reqInfo.getUrl
-    short_url = "#{url.protocol}://#{url.host}/#{url.path}"
-
-    #Are there any strings that look like UUIDs/Guids in identifiable request parameters?
-    #special case URL path
-    findUUIDs(url.path).each do |uuid|
-      a = @requestUUIDS[short_url] || Array.new
-      item = UUIDParameterInfo.new
-      item.name = '"url path"'
-      item.uuid = uuid
-      item.type = 0
-      a << item
-      @sync.synchronize { @requestUUIDS[short_url] = a } #set in case array was a new object
-    end
-    params = reqInfo.getParameters.to_array
-    params.each do |param|
-      findUUIDs(param.getValue).each do |uuid|
-        a = @requestUUIDS[short_url] || Array.new
-        item = UUIDParameterInfo.new(param)
-        item.uuid = uuid
-        a << item
-        @sync.synchronize { @requestUUIDS[short_url] = a } #set in case array was a new object
-      end
-    end
-    @requestUUIDS[short_url].uniq! {|item| item.uuid} if @requestUUIDS[short_url]
-
-    findUUIDs(bytesToString(baseRequestResponse.getResponse)).each do |uuid|
-      a = @responseUUIDS[short_url] || Array.new
-      a << uuid
-      @sync.synchronize { @responseUUIDS[short_url] = a }
-    end
-    @responseUUIDS[short_url].uniq! if @responseUUIDS[short_url]
-    nil #Need explit return for interface
+  def ignoreCookies
+    @ignoreCookies ||= false
   end
 
-  def writeReport
-    @sync.synchronize do
-      matches = Array.new
-      @requestUUIDS.each do |url, parameters|
-        parameters.each do |parameter|
-          @responseUUIDS.each do |src_url, uuids|
-            next if src_url == url #Ignore if the UUID is just reflected in a response
-            if uuids.include? parameter.uuid
-              item = Array.new
-              p = parameter.dup
-              p.uuid = nil
-              item << url; item << p.name; item << p.type; item << src_url
-              matches << item
-            end
-          end
-          matches.uniq!
-        end
-      end
-      matches.unshift ['URL', 'Parameter', 'Type', 'Source URL']
-      matches.map!(&:to_csv)
-      matches.join
+  def ignoreCookies!
+    @ignoreCookies = !ignoreCookies
+  end
+
+  def clear
+    @responseUUIDS.clear
+    @requestUUIDS.clear
+  end
+
+  def scan(baseRequestResponse)
+    return if (baseRequestResponse.getRequest.nil? or baseRequestResponse.getResponse.nil?)
+    requestInfo = analyzeRequest(baseRequestResponse.getHttpService, baseRequestResponse.getRequest)
+
+    url = requestInfo.getUrl
+    short_url = "#{url.protocol}://#{url.host}#{url.path}"
+
+    response = bytesToString(baseRequestResponse.getResponse).to_s
+    #try and determine if this is GraphQL
+    gqlType, gqlOperation = checkGraphQL(baseRequestResponse, requestInfo, response, url)
+
+    #Grab response UUIDs
+    response.scan(GUID_RE).each { |uuid| @responseUUIDS.add [short_url, gqlOperation], uuid }
+
+    #Grap request UUIDs
+    parameters = requestInfo.getParameters.to_array
+    parameters.each do |parameter|
+      value = parameter.getValue.to_s
+      value.scan(GUID_RE).each {|uuid| @requestUUIDS.add(short_url, requestInfo.getMethod,
+                                                         parameter.getName,
+                                                         ParameterTypes[parameter.getType],
+                                                         uuid,
+                                                         gqlType,
+                                                         gqlOperation)}
     end
+
+    #special case of url "path parameter"
+    index = 0
+    url.path.to_s.scan(GUID_RE).each {|uuid|
+      @requestUUIDS.add(short_url, requestInfo.getMethod, "idx #{index}",
+                        :url_path, uuid,nil,nil)
+    }
+  end
+
+  def report
+    matches = Array.new
+    @requestUUIDS.each do |tuple, uuids|
+      next if (tuple[:parameterType] == :cookie) and ignoreCookies
+      uuids.each do |uuid|
+        urls = @responseUUIDS[uuid]
+        urls.each {|url| a = [tuple, url]; matches << a unless matches.include? a } if urls
+      end
+    end
+    csv = CSV.generate do |report|
+      report << ['URL', 'Method', 'Parameter', 'Parameter Type', 'GraphQL Type',
+                 'GraphQL Operation', 'Source URL', 'Source GraphQL Operation']
+      matches.each do |record|
+        report << (record[0].to_a + record[1])
+      end
+    end
+    csv
   end
 
   private
 
-  #return an array of normalized UUID strings
-  def findUUIDs(str)
-    uuids = str.to_s.scan(GUID_RE) #convert from Java String to ruby string if needed
-    uuids.map! do |uuid|
-      uuid.tr! '-', ''
-      uuid.downcase!
-      ( uuid.sub('%2d', '') || uuid )
-    end
+  def checkGraphQL(baseRequestResponse, requestInfo, response, url)
+    q = d = gqlType = gqlOperation = nil
 
-    uuids.reject! {|uuid| uuid.bytes.uniq.count <= GUID_MIN_UNIQ_BYTES }
-    uuids.uniq
+    case requestInfo.getMethod
+    when 'POST'
+      if Java::Burp::IRequestInfo::CONTENT_TYPE_JSON == requestInfo.getContentType
+        q = GQL_REQUEST_RE.match bytesToString(baseRequestResponse.getRequest).to_s
+        d = GQL_RESPONSE_RE.match response
+      end
+    when 'GET'
+      d = GQL_RESPONSE_RE.match response
+      q = url.getQuery.to_s.scan(GQL_REQUEST_Q_RE)[0]
+    end
+    unless (q.nil? and d.nil?)
+      gqlType ||= q['type']
+      gqlOperation = q['name']
+    end
+    [gqlType, gqlOperation]
+  rescue => e
+    [nil,nil]
   end
+
 end
 
 java_import 'burp.IContextMenuFactory'
 class UUIDCorrelationContextMenuFactory
   include IContextMenuFactory
-  CONTEXT_TARGET_SITE_MAP_TREE = 4;
+  include BURPMethods
+  include BURPEnums
 
   def initialize(scannerInstance)
     @ScannerInstance = scannerInstance
   end
 
   def createMenuItems(invocation)
-    return nil unless invocation.getInvocationContext.to_i == CONTEXT_TARGET_SITE_MAP_TREE
-    i = BMenuItem.new("Write UUID Correlation Report to ~/UUID_MAP.csv") do
-      File.write("#{ENV['HOME']}/UUID_MAP.csv", @ScannerInstance.writeReport)
+    return nil unless invocation.getInvocationContext == ContextMenuInvocation.invert[:site_map_tree]
+    component = invocation.getInputEvent.getComponent
+    items = Array.new
+
+    items << BMenuItem.new("Write UUID Correlation Report to File") do
+      Thread.new do
+      BFileChooser.new(component).filter('Comma-seperated Values', "csv").prompt("Save-As") do |pathspec|
+        File.write(pathspec, @ScannerInstance.report)
+        JOptionPane.showMessageDialog(component,"Wrote file - #{pathspec}", 'Finished!', JOptionPane::INFORMATION_MESSAGE)
+      end
+      end
     end
-    [i]
+
+    items << BMenuItem.new("Add URL Prefix to Correlation Data") do
+      Thread.new do
+        cnt = 0
+        invocation.getSelectedMessages.to_a.each do |message|
+          url = analyzeRequest(message).getUrl
+          prefix = url.to_s
+          #Fix some url patterns
+          prefix.sub! ":443", '' if (url.port == 443 and url.protocol == 'https')
+          prefix.sub! ":80", '' if (url.port == 80 and url.protocol == 'http')
+          getSiteMap(prefix).to_a.each do |i|
+            @ScannerInstance.scan i
+            cnt += 1
+          end
+        end
+        JOptionPane.showMessageDialog(component,"Scanned #{cnt} item(s).", 'Scan Result', JOptionPane::INFORMATION_MESSAGE)
+      end
+    end
+
+    items << BMenuItem.new("Clear Correlation Data") do
+      @ScannerInstance.clear
+      JOptionPane.showMessageDialog(component,"All Fresh and Clean!", 'Items Cleared', JOptionPane::INFORMATION_MESSAGE)
+    end
+
+    unless @ScannerInstance.ignoreCookies
+      items << BMenuItem.new('Ignore Cookies') { @ScannerInstance.ignoreCookies! }
+    else
+      items << BMenuItem.new('Report Cookies') { @ScannerInstance.ignoreCookies! }
+    end
+
+    items
   end
 end
+
 
 java_import 'burp.IBurpExtender'
 class BurpExtender
@@ -389,21 +361,12 @@ class BurpExtender
 
   def registerExtenderCallbacks(callbacks)
 
-    ###DEBUG
-    #java.lang.System.setProperty('jruby.home', '/opt/jruby-9.1.0.0')
-    #java.lang.System.setProperty('jruby.lib', '/opt/jruby-9.1.0.0/lib')
-    #require 'pry'
-    #require 'pry-nav'
-    ###END
-
     callbacks.setExtensionName ExtensionName
     ObjectSpace.each_object(Class).select {|klass| klass < BURPMethods }.each do |kklass|
       kklass.callbacks = callbacks
     end
-    scanner = UUIDCorrelationScanCheck.new
-    callbacks.registerScannerCheck(scanner)
-    callbacks.registerContextMenuFactory UUIDCorrelationContextMenuFactory.new(scanner)
-    Thread.new { binding.pry }
+    callbacks.registerContextMenuFactory UUIDCorrelationContextMenuFactory.new(UUIDCorrelation.new)
+
   end
 
 end
