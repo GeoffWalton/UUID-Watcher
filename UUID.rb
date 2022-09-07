@@ -231,7 +231,7 @@ class UUIDCorrelation
     #Grab response UUIDs
     response.scan(GUID_RE).each { |uuid| @responseUUIDS.add [short_url, gqlOperation], uuid }
 
-    #Grap request UUIDs
+    #Grab request UUIDs
     parameters = requestInfo.getParameters.to_array
     parameters.each do |parameter|
       value = parameter.getValue.to_s
@@ -309,13 +309,14 @@ class UUIDCorrelationContextMenuFactory
   def createMenuItems(invocation)
     return nil unless invocation.getInvocationContext == ContextMenuInvocation.invert[:site_map_tree]
     component = invocation.getInputEvent.getComponent
+    window = component.getTopLevelAncestor
     items = Array.new
 
     items << BMenuItem.new("Write UUID Correlation Report to File") do
       Thread.new do
-      BFileChooser.new(component).filter('Comma-seperated Values', "csv").prompt("Save-As") do |pathspec|
+      BFileChooser.new(window).filter('Comma-seperated Values', "csv").prompt("Save-As") do |pathspec|
         File.write(pathspec, @ScannerInstance.report)
-        JOptionPane.showMessageDialog(component,"Wrote file - #{pathspec}", 'Finished!', JOptionPane::INFORMATION_MESSAGE)
+        JOptionPane.showMessageDialog(window,"Wrote file - #{pathspec}", 'Finished!', JOptionPane::INFORMATION_MESSAGE)
       end
       end
     end
@@ -327,26 +328,25 @@ class UUIDCorrelationContextMenuFactory
           url = analyzeRequest(message).getUrl
           prefix = url.to_s
           #Fix some url patterns
-          prefix.sub! ":443", '' if (url.port == 443 and url.protocol == 'https')
-          prefix.sub! ":80", '' if (url.port == 80 and url.protocol == 'http')
+          prefix.sub! ":#{url.getDefaultPort}", '' if url.port == url.getDefaultPort
           getSiteMap(prefix).to_a.each do |i|
             @ScannerInstance.scan i
             cnt += 1
           end
         end
-        JOptionPane.showMessageDialog(component,"Scanned #{cnt} item(s).", 'Scan Result', JOptionPane::INFORMATION_MESSAGE)
+        JOptionPane.showMessageDialog(window,"Scanned #{cnt} item(s).", 'Scan Result', JOptionPane::INFORMATION_MESSAGE)
       end
     end
 
     items << BMenuItem.new("Clear Correlation Data") do
       @ScannerInstance.clear
-      JOptionPane.showMessageDialog(component,"All Fresh and Clean!", 'Items Cleared', JOptionPane::INFORMATION_MESSAGE)
+      JOptionPane.showMessageDialog(window,"All Fresh and Clean!", 'Items Cleared', JOptionPane::INFORMATION_MESSAGE)
     end
 
     unless @ScannerInstance.ignoreCookies
-      items << BMenuItem.new('Ignore Cookies') { @ScannerInstance.ignoreCookies! }
+      items << BMenuItem.new('Ignore UUIDs in Cookies') { @ScannerInstance.ignoreCookies! }
     else
-      items << BMenuItem.new('Report Cookies') { @ScannerInstance.ignoreCookies! }
+      items << BMenuItem.new('Report UUIDs in Cookies') { @ScannerInstance.ignoreCookies! }
     end
 
     items
@@ -357,7 +357,7 @@ end
 java_import 'burp.IBurpExtender'
 class BurpExtender
   include IBurpExtender
-  ExtensionName = 'UUID'
+  ExtensionName = 'UUID Watcher'
 
   def registerExtenderCallbacks(callbacks)
 
